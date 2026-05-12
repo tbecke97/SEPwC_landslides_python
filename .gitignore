@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Tue May 12 19:40:28 2026
+
+@author: tombeckett
+"""
+
+venv/
+.DS_Store
+*.pyc
+__pycache__/
