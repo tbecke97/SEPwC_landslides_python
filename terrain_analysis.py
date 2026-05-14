@@ -40,7 +40,38 @@ def reproject_to_match(in_raster, template_raster):
 
 
 def calculate_distance_to_faults(fault_shapefile, template_raster):
-    return
+    """
+    Computes the distance from every pixel to the nearest fault line using xrspatial
+    """
+    # Load and reproject vector data to match our raster grid
+    faults = gpd.read_file(fault_shapefile)
+    faults = faults.to_crs(template_raster.rio.crs)
+   
+    # Rasterize: Create a 2D float grid where faults are 1 and background is NaN
+    from rasterio import features
+    mask = features.rasterize(
+        [(shape, 1) for shape in faults.geometry],
+        out_shape=template_raster.shape[-2:],
+        transform=template_raster.rio.transform(),
+        fill=np.nan,
+        all_touched=True,
+        dtype='float32'
+    )
+    
+    # Convert to DataArray using 2D coordinates to match mask dimensions
+    mask_da = xr.DataArray(
+        mask, 
+        coords=template_raster.isel(band=0).coords, 
+        dims=template_raster.isel(band=0).dims
+        )
+    
+    # Generate proximity map (distance in coordinate units)
+    dist_fault = xr_proximity(mask_da)
+    
+    return dist_fault.expand_dims(dim="band", axis=0)
+    
+
+
 
 
 def main(args_list=None):
@@ -73,6 +104,19 @@ def main(args_list=None):
     if args.verbose:
         print(f"SUCCESS: Topography, Geology, and Landcover loaded and aligned.")
         print(f"Common Shape: {topo.shape}")
+        
+    # --- Phase 2: Generating Terrain Features ---
+    if args.verbose:
+        print("--- Phase 2: Generating Terrain Features ---")
+        
+    # Generate Slope: xrspatial requires a 2D input, so we select the first band
+    slope = xr_slope(topo.sel(band=1))
+    
+    # Generate Fault Proximity: Uses the custom function defined above
+    dist_fault = calculate_distance_to_faults(args.faults, topo)
+        
+    if args.verbose:
+        print("SUCCESS: Terrain features generated.")
         
 if __name__ == '__main__':
     main()
