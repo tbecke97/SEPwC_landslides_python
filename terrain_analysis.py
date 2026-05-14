@@ -16,7 +16,20 @@ from xrspatial import slope as xr_slope
 from xrspatial import proximity as xr_proximity
 
 def extract_values_from_raster(da, shapes):
-    return
+    """
+    Extracts pixel values from a DataArray at the locations of vector shapes.
+    Handles both Points and Polygons by using the centroid.
+    """
+    # Ensure shapes match the raster projection
+    shapes = shapes.to_crs(da.rio.crs)
+    
+    # Use .centroid to get a single point regardless of geometry type
+    values = [
+        da.sel(x=s.centroid.x, y=s.centroid.y, method="nearest").values.item() 
+        for s in shapes.geometry
+    ]
+    
+    return np.array(values)
     
 
 def make_classifier(x, y, verbose=False):
@@ -28,7 +41,18 @@ def make_prob_raster_data(topo, geo, lc, dist_fault, slope, classifier):
 
 
 def create_dataframe(topo, geo, lc, dist_fault, slope, shapes, landslide_label):
-    return
+    """
+    Combines multiple spatial layers into a single DataFrame for ML training.
+    """
+    df = pd.DataFrame({
+        'elevation': extract_values_from_raster(topo.sel(band=1), shapes),
+        'geology': extract_values_from_raster(geo.sel(band=1), shapes),
+        'landcover': extract_values_from_raster(lc.sel(band=1), shapes),
+        'slope': extract_values_from_raster(slope, shapes),
+        'dist_fault': extract_values_from_raster(dist_fault.sel(band=1), shapes),
+        'class': landslide_label
+    })
+    return df
 
 def reproject_to_match(in_raster, template_raster):
     
@@ -117,6 +141,34 @@ def main(args_list=None):
         
     if args.verbose:
         print("SUCCESS: Terrain features generated.")
+        
+    # --- Phase 3: Preparing Training Data ---
+    if args.verbose:
+        print("--- Phase 3: Preparing Training Data ---")
+        
+    # Load landslide locations
+    landslides = gpd.read_file(args.landslides)
+    
+    # 2. Create 'Negative' samples (Non-landslide areas)
+    # We create random points where landslides DIDN'T happen to balance the model
+    bounds = topo.rio.bounds()
+    x_random = np.random.uniform(bounds[0], bounds[2], len(landslides))
+    y_random = np.random.uniform(bounds[1], bounds[3], len(landslides))
+    non_landslides = gpd.GeoDataFrame(
+        geometry=gpd.points_from_xy(x_random, y_random), 
+        crs=topo.rio.crs
+    )
+
+    # 3. Build the DataFrames
+    df_pos = create_dataframe(topo, geo, lc, dist_fault, slope, landslides, 1)
+    df_neg = create_dataframe(topo, geo, lc, dist_fault, slope, non_landslides, 0)
+
+    # 4. Combine into one master training set
+    training_data = pd.concat([df_pos, df_neg])
+
+    if args.verbose:
+        print(f"SUCCESS: Created training set with {len(training_data)} rows.")
+        print(training_data.head()) # Show the first 5 rows to verify
         
 if __name__ == '__main__':
     main()
