@@ -33,26 +33,63 @@ def extract_values_from_raster(da, shapes):
     
 
 def make_classifier(x, y, verbose=False):
-    return
+    
+    """
+    Trains a Random Forest classifier.
+    Returns the trained model to satisfy pytest requirements.
+    """
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    model.fit(x, y)
+    
+    if verbose:
+        # Quick internal check
+        predictions = model.predict(x)
+        acc = accuracy_score(y, predictions)
+        print(f"Internal Training Accuracy: {acc * 100:.2f}%")
+        
+    return model
 
 
 def make_prob_raster_data(topo, geo, lc, dist_fault, slope, classifier):
-    return
+    """
+    Uses the trained classifier to predict probability for every pixel.
+    """
+    # Flatten all layers into a table (matches training dataframe order)
+    data = {
+        'elev': topo.isel(band=0).values.flatten(),
+        'Geol': geo.isel(band=0).values.flatten(),
+        'LC': lc.isel(band=0).values.flatten(),
+        'slope': slope.values.flatten(),
+        'fault': dist_fault.isel(band=0).values.flatten()
+    }
+    
+    df_map = pd.DataFrame(data)
+    
+    # Get probability of class '1' (landslide)
+    probs = classifier.predict_proba(df_map)[:, 1]
+    
+    # Reshape back to 2D
+    return probs.reshape(topo.isel(band=0).shape)
 
 
 def create_dataframe(topo, geo, lc, dist_fault, slope, shapes, landslide_label):
     """
-    Combines multiple spatial layers into a single DataFrame for ML training.
+    Combines spatial layers into a DataFrame with column names matching 
+    the test suite schema (elev, fault, slope, LC, Geol, ls).
     """
-    df = pd.DataFrame({
-        'elevation': extract_values_from_raster(topo.sel(band=1), shapes),
-        'geology': extract_values_from_raster(geo.sel(band=1), shapes),
-        'landcover': extract_values_from_raster(lc.sel(band=1), shapes),
-        'slope': extract_values_from_raster(slope, shapes),
-        'dist_fault': extract_values_from_raster(dist_fault.sel(band=1), shapes),
-        'class': landslide_label
-    })
-    return df
+    def get_layer(da):
+        return da.isel(band=0) if 'band' in da.dims else da
+
+    data = {
+        'elev': extract_values_from_raster(get_layer(topo), shapes),
+        'Geol': extract_values_from_raster(get_layer(geo), shapes),
+        'LC': extract_values_from_raster(get_layer(lc), shapes),
+        'slope': extract_values_from_raster(get_layer(slope), shapes),
+        'fault': extract_values_from_raster(get_layer(dist_fault), shapes),
+        'ls': landslide_label # This is the target class
+    }
+    
+    return pd.DataFrame(data)
 
 def reproject_to_match(in_raster, template_raster):
     
@@ -150,7 +187,7 @@ def main(args_list=None):
     landslides = gpd.read_file(args.landslides)
     
     # 2. Create 'Negative' samples (Non-landslide areas)
-    # We create random points where landslides DIDN'T happen to balance the model
+    # Create random points where landslides didn't happen to balance the model
     bounds = topo.rio.bounds()
     x_random = np.random.uniform(bounds[0], bounds[2], len(landslides))
     y_random = np.random.uniform(bounds[1], bounds[3], len(landslides))
@@ -169,6 +206,33 @@ def main(args_list=None):
     if args.verbose:
         print(f"SUCCESS: Created training set with {len(training_data)} rows.")
         print(training_data.head()) # Show the first 5 rows to verify
+    
+    # --- Phase 4: Training & Prediction ---
+    if args.verbose:
+        print("--- Phase 4: Training Classifier ---")
+        
+    X = training_data.drop(columns=['ls'])
+    y = training_data['ls']
+    
+    # Train the model
+    classifier = make_classifier(X, y, verbose=args.verbose)
+    
+    # Generate the probability grid 
+    prob_array = make_prob_raster_data(topo, geo, lc, dist_fault, slope, classifier)
+    
+    # --- Phase 5: Saving Output ---
+    # Convert the numpy array back into an xarray DataArray to save as TIF
+    output_da = xr.DataArray(
+        prob_array.astype(np.float32),
+        coords=topo.isel(band=0).coords,
+        dims=topo.isel(band=0).dims,
+        name="probability"
+    )
+    
+    output_da.rio.to_raster(args.output)
+    
+    if args.verbose:
+        print(f"SUCCESS: Risk map saved to {args.output}")
         
 if __name__ == '__main__':
     main()
