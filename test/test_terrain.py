@@ -134,9 +134,9 @@ class TestTerrainAnalysis():
                 results["pass"] += 1
             else:
                 results["fail"] += 1
-
-        print(f"You passed {results['pass']} out of {len(score_thresholds) + \
-                len(error_thresholds)} lint checks.")
+              
+        total_checks = len(score_thresholds) + len(error_thresholds)
+        print(f"You passed {results['pass']} out of {total_checks} lint checks.")
         
         # Finally, trigger a failure if they didn't get a perfect score
         # or just assert results["fail"] == 0
